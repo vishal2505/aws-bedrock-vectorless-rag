@@ -12,12 +12,10 @@ terraform {
     }
   }
 
-  # Uncomment to store state in S3 (recommended for team use):
-  # backend "s3" {
-  #   bucket = "your-terraform-state-bucket"
-  #   key    = "vectorless-rag/terraform.tfstate"
-  #   region = "ap-southeast-1"
-  # }
+  # S3 backend — all values supplied via -backend-config flags in CI
+  # (partial configuration pattern — safe to commit, no secrets here).
+  # For local use without a state bucket, run: terraform init -backend=false
+  backend "s3" {}
 }
 
 provider "aws" {

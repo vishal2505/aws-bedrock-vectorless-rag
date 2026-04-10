@@ -113,13 +113,17 @@ In the AWS Console → **Amazon Bedrock → Model access**, request access for *
 
 ### 2. Create AWS resources for local testing
 
-These commands create the S3 bucket and DynamoDB table that the local server will use. Replace `YOUR_ACCOUNT_ID` and `YOUR_REGION` as needed.
+These commands create the S3 bucket and DynamoDB table used by the local server.
+Replace `YOUR_ACCOUNT_ID` with your 12-digit AWS account ID.
 
 ```bash
-# S3 bucket for documents
-aws s3 mb s3://vectorless-rag-docs-YOUR_ACCOUNT_ID --region YOUR_REGION
+export AWS_REGION=ap-southeast-1
+export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 
-# DynamoDB table (PAY_PER_REQUEST billing)
+# S3 bucket for documents
+aws s3 mb s3://vectorless-rag-docs-${AWS_ACCOUNT_ID} --region ${AWS_REGION}
+
+# DynamoDB table (on-demand billing, no capacity planning)
 aws dynamodb create-table \
   --table-name vectorless-rag-rag-index \
   --attribute-definitions \
@@ -129,7 +133,12 @@ aws dynamodb create-table \
       AttributeName=doc_id,KeyType=HASH \
       AttributeName=record_type,KeyType=RANGE \
   --billing-mode PAY_PER_REQUEST \
-  --region YOUR_REGION
+  --region ${AWS_REGION}
+
+# Confirm both resources exist
+aws s3 ls | grep vectorless-rag-docs
+aws dynamodb describe-table --table-name vectorless-rag-rag-index \
+  --query "Table.TableStatus" --output text
 ```
 
 ### 3. Configure environment variables
@@ -190,10 +199,12 @@ The document list will load and you're ready to test.
 ### 7. Test with curl (local)
 
 ```bash
-# Upload a document to S3
-aws s3 cp ./my-report.pdf s3://vectorless-rag-docs-YOUR_ACCOUNT_ID/documents/my-report.pdf
+export BUCKET="vectorless-rag-docs-$(aws sts get-caller-identity --query Account --output text)"
 
-# Ingest it
+# Upload a document to S3
+aws s3 cp ./my-report.pdf s3://${BUCKET}/documents/my-report.pdf
+
+# Ingest it (calls Bedrock to build the tree — takes 30-90 s for a typical PDF)
 curl -s -X POST http://localhost:8000/ingest \
   -H "Content-Type: application/json" \
   -d '{"s3_key": "documents/my-report.pdf", "doc_id": "my-report"}' | python3 -m json.tool
@@ -203,9 +214,37 @@ curl -s -X POST http://localhost:8000/query \
   -H "Content-Type: application/json" \
   -d '{"doc_id": "my-report", "question": "What are the main recommendations?"}' | python3 -m json.tool
 
-# List indexed documents
+# List all indexed documents
 curl -s http://localhost:8000/documents | python3 -m json.tool
 ```
+
+### 8. Clean up local testing resources
+
+When you are done with local testing and want to remove the manually-created AWS resources:
+
+```bash
+export AWS_REGION=ap-southeast-1
+export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+export BUCKET="vectorless-rag-docs-${AWS_ACCOUNT_ID}"
+
+# 1. Delete all objects inside the S3 bucket first
+aws s3 rm s3://${BUCKET} --recursive
+
+# 2. Delete the S3 bucket itself
+aws s3 rb s3://${BUCKET}
+
+# 3. Delete the DynamoDB table
+aws dynamodb delete-table \
+  --table-name vectorless-rag-rag-index \
+  --region ${AWS_REGION}
+
+# Confirm deletion
+echo "Waiting for DynamoDB table to be deleted..."
+aws dynamodb wait table-not-exists --table-name vectorless-rag-rag-index
+echo "All local testing resources deleted."
+```
+
+> **Note:** Do not run these if you have already deployed via Terraform — Terraform manages those resources and `terraform destroy` should be used instead.
 
 ---
 
@@ -221,6 +260,34 @@ In addition to the local dev prerequisites above, you need:
 |------|---------|
 | Terraform ≥ 1.5 | [hashicorp.com/terraform](https://developer.hashicorp.com/terraform/downloads) |
 | Node.js 18+ & npm | Required by `deploy.sh` to build the React app |
+
+### 0. Create the Terraform state bucket (one-time setup)
+
+Terraform stores its state remotely in S3 so that both local runs and GitHub Actions share the same state. This bucket must be created **once** before any deployment.
+
+```bash
+# The state bucket for this project
+export TF_STATE_BUCKET="vectorless-rag-infra-tf-state-1"
+export AWS_REGION=ap-southeast-1
+
+# Create the bucket
+aws s3 mb s3://${TF_STATE_BUCKET} --region ${AWS_REGION}
+
+# Enable versioning so you can recover from accidental state corruption
+aws s3api put-bucket-versioning \
+  --bucket ${TF_STATE_BUCKET} \
+  --versioning-configuration Status=Enabled
+
+# Block all public access (state files must never be public)
+aws s3api put-public-access-block \
+  --bucket ${TF_STATE_BUCKET} \
+  --public-access-block-configuration \
+    BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+
+echo "Terraform state bucket ready: s3://${TF_STATE_BUCKET}"
+```
+
+> This bucket is **separate** from the application documents bucket (`vectorless-rag-docs-*`). Never delete it while you have live Terraform-managed infrastructure.
 
 ### 1. Run the deploy script
 
@@ -349,11 +416,36 @@ The script rebuilds the Lambda package and the React app. Terraform detects the 
 
 ## Destroying all resources
 
+### Via GitHub Actions (recommended)
+
+Go to **Actions → Deploy / Destroy Vectorless RAG → Run workflow**, select **action = destroy**, and click **Run workflow**. The workflow will empty the S3 buckets and run `terraform destroy` automatically.
+
+### Via CLI (manual)
+
 ```bash
-terraform -chdir=terraform destroy
+export AWS_REGION=ap-southeast-1
+export TF_STATE_BUCKET="vectorless-rag-infra-tf-state-1"
+
+# 1. Empty the application S3 buckets (Terraform cannot delete non-empty buckets)
+DOCS_BUCKET=$(terraform -chdir=terraform output -raw documents_bucket_name 2>/dev/null || echo "")
+WEBSITE_BUCKET=$(terraform -chdir=terraform output -raw website_bucket_name 2>/dev/null || echo "")
+
+[ -n "$DOCS_BUCKET" ]    && aws s3 rm s3://$DOCS_BUCKET    --recursive
+[ -n "$WEBSITE_BUCKET" ] && aws s3 rm s3://$WEBSITE_BUCKET --recursive
+
+# 2. Destroy all Terraform-managed infrastructure
+TF_VAR_aws_region=${AWS_REGION} \
+terraform -chdir=terraform destroy \
+  -var="aws_region=${AWS_REGION}"
 ```
 
-> This permanently deletes all S3 objects, the DynamoDB table, Lambda functions, and API Gateway. It does **not** delete the CloudWatch log groups (retention will expire them naturally).
+> - This permanently deletes the application S3 buckets, DynamoDB table, Lambda functions, and API Gateway.
+> - CloudWatch log groups are **not** deleted (they expire naturally per the `log_retention_days` variable).
+> - The **Terraform state bucket** (`vectorless-rag-infra-tf-state-1`) is intentionally left intact so you can redeploy cleanly. Delete it manually only when you are done with the project entirely:
+>   ```bash
+>   aws s3 rm s3://vectorless-rag-infra-tf-state-1 --recursive
+>   aws s3 rb s3://vectorless-rag-infra-tf-state-1
+>   ```
 
 ---
 

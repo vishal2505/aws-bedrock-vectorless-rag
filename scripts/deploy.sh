@@ -131,7 +131,16 @@ ls -1 "${LAMBDA_PKG_DIR}/"
 echo ""
 echo "==> Initialising Terraform…"
 cd "${TF_DIR}"
-terraform init -upgrade -reconfigure
+# Use local backend when no TF_STATE_BUCKET is set (typical for local dev).
+# In CI the GitHub Actions workflow passes -backend-config flags instead.
+if [[ -n "${TF_STATE_BUCKET:-}" ]]; then
+  terraform init -upgrade -reconfigure \
+    -backend-config="bucket=${TF_STATE_BUCKET}" \
+    -backend-config="key=vectorless-rag/terraform.tfstate" \
+    -backend-config="region=${TF_REGION:-ap-southeast-1}"
+else
+  terraform init -upgrade -reconfigure -backend=false
+fi
 
 echo ""
 echo "==> Planning Terraform changes…"
