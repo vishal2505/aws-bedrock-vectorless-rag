@@ -226,19 +226,28 @@ def _load_tree_metadata(doc_id: str) -> Optional[list]:
 
 def _flatten_for_prompt(tree: list[dict]) -> list[dict]:
     """
-    Recursively flatten the tree into a simple list for inclusion in the
-    retrieval prompt.  Each entry has node_id, title, summary only.
+    Recursively flatten the tree into a list of LEAF nodes for the retrieval
+    prompt. Only leaf nodes (no 'children' key) have text stored in DynamoDB,
+    so only they are valid retrieval targets for Bedrock to select.
+
+    Parent nodes are excluded: their summaries are aggregated from children
+    and no 'node#<id>' item exists in DynamoDB for them.
     """
     result: list[dict] = []
 
     def _recurse(node: dict) -> None:
-        result.append({
-            "node_id": node["node_id"],
-            "title": node.get("title", ""),
-            "summary": node.get("summary", ""),
-        })
-        for child in node.get("children", []):
-            _recurse(child)
+        children = node.get("children", [])
+        if not children:
+            # Leaf node — has stored text, valid retrieval target
+            result.append({
+                "node_id": node["node_id"],
+                "title":   node.get("title", ""),
+                "summary": node.get("summary", ""),
+            })
+        else:
+            # Parent node — recurse into children only
+            for child in children:
+                _recurse(child)
 
     for root in tree:
         _recurse(root)
