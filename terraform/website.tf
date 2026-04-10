@@ -7,7 +7,8 @@ locals {
 }
 
 resource "aws_s3_bucket" "website" {
-  bucket = local.website_bucket_name
+  bucket        = local.website_bucket_name
+  force_destroy = true
 }
 
 # Website buckets need public access enabled

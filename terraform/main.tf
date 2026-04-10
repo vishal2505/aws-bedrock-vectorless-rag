@@ -15,7 +15,8 @@ locals {
 # ===========================================================================
 
 resource "aws_s3_bucket" "documents" {
-  bucket = local.documents_bucket_name
+  bucket        = local.documents_bucket_name
+  force_destroy = true
 }
 
 resource "aws_s3_bucket_versioning" "documents" {
