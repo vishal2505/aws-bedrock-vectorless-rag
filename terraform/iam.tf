@@ -1,4 +1,40 @@
 # ===========================================================================
+# IAM — API Gateway CloudWatch logging role (account-level setting)
+#
+# API Gateway requires a single IAM role to be registered at the AWS account
+# level before any stage can write access logs to CloudWatch Logs.
+# ===========================================================================
+
+resource "aws_iam_role" "apigw_cloudwatch" {
+  name        = "${var.project_name}-apigw-cloudwatch"
+  description = "Allows API Gateway to push logs to CloudWatch Logs"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "APIGatewayAssumeRole"
+        Effect    = "Allow"
+        Principal = { Service = "apigateway.amazonaws.com" }
+        Action    = "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "apigw_cloudwatch" {
+  role       = aws_iam_role.apigw_cloudwatch.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs"
+}
+
+# Register the role at account level — required once per AWS account per region
+resource "aws_api_gateway_account" "main" {
+  cloudwatch_role_arn = aws_iam_role.apigw_cloudwatch.arn
+
+  depends_on = [aws_iam_role_policy_attachment.apigw_cloudwatch]
+}
+
+# ===========================================================================
 # IAM — Lambda execution role and inline policies
 # ===========================================================================
 

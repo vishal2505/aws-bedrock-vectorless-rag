@@ -451,6 +451,16 @@ terraform -chdir=terraform destroy \
 
 ## Troubleshooting
 
+**`CloudWatch Logs role ARN must be set in account settings` during Terraform apply**
+
+```
+BadRequestException: CloudWatch Logs role ARN must be set in account settings to enable logging
+```
+
+API Gateway requires an IAM role to be registered at the AWS account level before any stage can write access logs to CloudWatch. This is handled automatically by Terraform via the `aws_api_gateway_account` resource in `iam.tf` — no manual action needed. If you see this error it means you applied Terraform without the `aws_api_gateway_account` resource (older version of the code). Pull the latest code and re-run the deployment.
+
+---
+
 **`S3 bucket does not exist` during `terraform init` (GitHub Actions or CLI)**
 
 ```
