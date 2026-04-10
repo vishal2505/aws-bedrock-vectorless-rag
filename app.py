@@ -43,6 +43,7 @@ import ingest_handler
 import query_handler
 import presign_handler
 import list_handler
+import delete_handler
 
 app = FastAPI(
     title="Vectorless RAG — local dev server",
@@ -111,6 +112,14 @@ async def presign(request: Request):
 async def list_documents():
     """List all indexed documents from DynamoDB."""
     result = list_handler.handler({}, None)
+    return _lambda_response(result)
+
+
+@app.delete("/documents/{doc_id}")
+async def delete_document(doc_id: str):
+    """Delete all index data for a document so it can be re-uploaded."""
+    event = {"pathParameters": {"doc_id": doc_id}}
+    result = delete_handler.handler(event, None)
     return _lambda_response(result)
 
 

@@ -102,6 +102,10 @@ export async function pollUntilIndexed(
   throw new Error('Indexing timed out after 5 minutes. Check Lambda logs for errors.')
 }
 
+export async function deleteDocument(docId: string): Promise<{ doc_id: string; deleted_items: number }> {
+  return apiFetch(`/documents/${encodeURIComponent(docId)}`, { method: 'DELETE' })
+}
+
 export async function queryDocument(
   docId: string,
   question: string,

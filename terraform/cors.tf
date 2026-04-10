@@ -183,3 +183,45 @@ resource "aws_api_gateway_integration_response" "options_documents" {
   }
   depends_on = [aws_api_gateway_integration.options_documents]
 }
+
+# ── /documents/{doc_id} OPTIONS ──────────────────────────────────────────────
+resource "aws_api_gateway_method" "options_document_by_id" {
+  rest_api_id   = aws_api_gateway_rest_api.rag_api.id
+  resource_id   = aws_api_gateway_resource.document_by_id.id
+  http_method   = "OPTIONS"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "options_document_by_id" {
+  rest_api_id       = aws_api_gateway_rest_api.rag_api.id
+  resource_id       = aws_api_gateway_resource.document_by_id.id
+  http_method       = aws_api_gateway_method.options_document_by_id.http_method
+  type              = "MOCK"
+  request_templates = { "application/json" = "{\"statusCode\": 200}" }
+}
+
+resource "aws_api_gateway_method_response" "options_document_by_id_200" {
+  rest_api_id        = aws_api_gateway_rest_api.rag_api.id
+  resource_id        = aws_api_gateway_resource.document_by_id.id
+  http_method        = aws_api_gateway_method.options_document_by_id.http_method
+  status_code        = "200"
+  response_models    = { "application/json" = "Empty" }
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Headers" = true
+    "method.response.header.Access-Control-Allow-Methods" = true
+    "method.response.header.Access-Control-Allow-Origin"  = true
+  }
+}
+
+resource "aws_api_gateway_integration_response" "options_document_by_id" {
+  rest_api_id = aws_api_gateway_rest_api.rag_api.id
+  resource_id = aws_api_gateway_resource.document_by_id.id
+  http_method = aws_api_gateway_method.options_document_by_id.http_method
+  status_code = aws_api_gateway_method_response.options_document_by_id_200.status_code
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Headers" = local.cors_allow_headers
+    "method.response.header.Access-Control-Allow-Methods" = "'DELETE,OPTIONS'"
+    "method.response.header.Access-Control-Allow-Origin"  = local.cors_allow_origin
+  }
+  depends_on = [aws_api_gateway_integration.options_document_by_id]
+}

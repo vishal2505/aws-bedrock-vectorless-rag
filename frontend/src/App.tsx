@@ -6,7 +6,7 @@ import DocumentList  from './components/DocumentList'
 import QueryPanel    from './components/QueryPanel'
 import SettingsModal from './components/SettingsModal'
 import Toaster       from './components/Toaster'
-import { fetchDocuments, getApiBase } from './api'
+import { fetchDocuments, getApiBase, deleteDocument } from './api'
 import type { Document, Toast } from './types'
 
 let _toastId = 0
@@ -61,6 +61,19 @@ export default function App() {
       return exists ? prev.map((d) => d.doc_id === doc.doc_id ? doc : d) : [doc, ...prev]
     })
     setSelectedDoc(doc)
+  }
+
+  const handleDocumentDeleted = async (doc: Document) => {
+    try {
+      await deleteDocument(doc.doc_id)
+      setDocuments((prev) => prev.filter((d) => d.doc_id !== doc.doc_id))
+      if (selectedDoc?.doc_id === doc.doc_id) setSelectedDoc(null)
+      addToast(`"${doc.doc_id}" removed — you can now re-upload it`, 'info')
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      addToast(`Delete failed: ${msg}`, 'error')
+      throw err  // let DocumentList reset its deleting state
+    }
   }
 
   const handleSettingsSave = (url: string) => {
@@ -118,6 +131,7 @@ export default function App() {
                 isLoading={isLoadingDocs}
                 onSelect={setSelectedDoc}
                 onRefresh={loadDocuments}
+                onDelete={handleDocumentDeleted}
               />
             </div>
           </div>

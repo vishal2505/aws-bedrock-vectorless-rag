@@ -251,18 +251,11 @@ def _persist_to_dynamodb(
     """
     table = get_dynamodb().Table(TABLE_NAME)
 
-    # --- Store tree metadata ---
-    tree_json = json.dumps(tree_metadata, ensure_ascii=False)
-    table.put_item(Item={
-        "doc_id": doc_id,
-        "record_type": "tree_metadata",
-        "s3_key": s3_key,
-        "tree": tree_json,
-        "node_count": len(node_texts),
-    })
-    logger.debug("Stored tree_metadata for doc_id=%s (%d chars)", doc_id, len(tree_json))
-
-    # --- Store leaf node texts (batched for efficiency) ---
+    # --- Store leaf node texts FIRST (batched for efficiency) ---
+    # IMPORTANT: node texts must be written before tree_metadata.
+    # The frontend polls for tree_metadata to appear; writing it last
+    # guarantees all node texts exist by the time the poll succeeds,
+    # preventing "Selected node IDs were not found in storage" errors.
     with table.batch_writer() as batch:
         for node_id, text in node_texts.items():
             # Truncate oversized texts to stay within DynamoDB 400 KB item limit
@@ -272,7 +265,6 @@ def _persist_to_dynamodb(
                     node_id,
                     _MAX_ITEM_TEXT_BYTES,
                 )
-                # Truncate safely at a UTF-8 boundary
                 text = text.encode("utf-8")[:_MAX_ITEM_TEXT_BYTES].decode("utf-8", errors="ignore")
 
             batch.put_item(Item={
@@ -283,5 +275,16 @@ def _persist_to_dynamodb(
             })
 
     logger.debug("Stored %d node text items for doc_id=%s", len(node_texts), doc_id)
+
+    # --- Store tree metadata LAST (signals readiness to the frontend poller) ---
+    tree_json = json.dumps(tree_metadata, ensure_ascii=False)
+    table.put_item(Item={
+        "doc_id": doc_id,
+        "record_type": "tree_metadata",
+        "s3_key": s3_key,
+        "tree": tree_json,
+        "node_count": len(node_texts),
+    })
+    logger.debug("Stored tree_metadata for doc_id=%s (%d chars)", doc_id, len(tree_json))
 
 
