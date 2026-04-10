@@ -451,6 +451,32 @@ terraform -chdir=terraform destroy \
 
 ## Troubleshooting
 
+**`S3 bucket does not exist` during `terraform init` (GitHub Actions or CLI)**
+
+```
+Error: Failed to get existing workspaces: S3 bucket "vectorless-rag-infra-tf-state-1" does not exist.
+```
+
+The Terraform remote state bucket must be created **manually once** before any deployment. This is a one-time prerequisite — run from your local terminal:
+
+```bash
+export TF_STATE_BUCKET="vectorless-rag-infra-tf-state-1"
+export AWS_REGION=ap-southeast-1
+
+aws s3 mb s3://${TF_STATE_BUCKET} --region ${AWS_REGION}
+
+aws s3api put-bucket-versioning \
+  --bucket ${TF_STATE_BUCKET} \
+  --versioning-configuration Status=Enabled
+
+aws s3api put-public-access-block \
+  --bucket ${TF_STATE_BUCKET} \
+  --public-access-block-configuration \
+    BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+```
+
+Once the bucket exists, re-trigger the GitHub Actions workflow (push a commit or use **Run workflow**).
+
 **`AccessDeniedException` from Bedrock**
 - The model is not enabled. Go to AWS Console → Amazon Bedrock → Model access and enable the model in your region.
 - Confirm the `bedrock_model_id` variable matches the enabled model exactly (case-sensitive).
