@@ -1,0 +1,5 @@
+# Lambda dependencies
+# boto3 is provided by the Lambda runtime — only third-party packages needed.
+
+# PDF parsing (pure Python, no native extensions required)
+pypdf>=3.17.0,<5.0.0

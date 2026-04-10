@@ -1,0 +1,109 @@
+### Vectorless RAG API — example requests
+### Compatible with VS Code REST Client extension and JetBrains HTTP Client.
+###
+### Replace {{BASE_URL}} with your actual API Gateway URL, e.g.:
+###   https://abc123def4.execute-api.ap-southeast-1.amazonaws.com/prod
+###
+### You can also export it as a shell variable and use the curl equivalents below.
+
+@BASE_URL = https://YOUR_API_ID.execute-api.ap-southeast-1.amazonaws.com/prod
+
+# ===========================================================================
+# 1. Trigger ingestion of an already-uploaded S3 document
+# ===========================================================================
+
+### Ingest a PDF (custom doc_id)
+POST {{BASE_URL}}/ingest
+Content-Type: application/json
+
+{
+  "s3_key": "documents/annual-report-2024.pdf",
+  "doc_id": "annual-report-2024"
+}
+
+###
+
+### Ingest a Markdown file (auto-generated doc_id)
+POST {{BASE_URL}}/ingest
+Content-Type: application/json
+
+{
+  "s3_key": "documents/product-spec.md"
+}
+
+###
+
+# ===========================================================================
+# 2. Query an indexed document
+# ===========================================================================
+
+### Simple factual question
+POST {{BASE_URL}}/query
+Content-Type: application/json
+
+{
+  "doc_id": "annual-report-2024",
+  "question": "What was the total revenue for the year?"
+}
+
+###
+
+### Multi-hop / summary question
+POST {{BASE_URL}}/query
+Content-Type: application/json
+
+{
+  "doc_id": "annual-report-2024",
+  "question": "What are the main strategic initiatives discussed in this report?"
+}
+
+###
+
+### Specific detail lookup
+POST {{BASE_URL}}/query
+Content-Type: application/json
+
+{
+  "doc_id": "annual-report-2024",
+  "question": "Who is the CEO and what did they say about future growth?"
+}
+
+###
+
+### Question not answerable from the document
+POST {{BASE_URL}}/query
+Content-Type: application/json
+
+{
+  "doc_id": "annual-report-2024",
+  "question": "What is the weather forecast for tomorrow?"
+}
+
+###
+
+
+# ===========================================================================
+# Curl equivalents
+# ===========================================================================
+#
+# Export the base URL first:
+#   export API_URL="https://YOUR_API_ID.execute-api.ap-southeast-1.amazonaws.com/prod"
+#
+# --- Upload document ---
+#   aws s3 cp ./my-document.pdf s3://YOUR_BUCKET_NAME/documents/my-document.pdf
+#
+# --- Ingest ---
+#   curl -s -X POST "$API_URL/ingest" \
+#     -H "Content-Type: application/json" \
+#     -d '{"s3_key": "documents/my-document.pdf", "doc_id": "my-doc"}' | jq .
+#
+# --- Query ---
+#   curl -s -X POST "$API_URL/query" \
+#     -H "Content-Type: application/json" \
+#     -d '{"doc_id": "my-doc", "question": "What are the key findings?"}' | jq .
+#
+# --- View Lambda logs (ingest) ---
+#   aws logs tail /aws/lambda/vectorless-rag-ingest --follow
+#
+# --- View Lambda logs (query) ---
+#   aws logs tail /aws/lambda/vectorless-rag-query --follow
