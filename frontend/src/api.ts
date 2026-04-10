@@ -59,15 +59,47 @@ export function uploadToS3(
   })
 }
 
+export interface IngestResponse {
+  doc_id: string
+  status: 'processing' | 'indexed'
+  node_count?: number   // present only when status === 'indexed' (local dev)
+}
+
 export async function ingestDocument(
   s3Key: string,
   docId: string,
-): Promise<{ doc_id: string; node_count: number }> {
-  return apiFetch('/ingest', {
+): Promise<IngestResponse> {
+  const base = getApiBase()
+  if (!base) throw new Error('API URL not configured. Click ⚙ to set it.')
+  const res = await fetch(`${base.replace(/\/$/, '')}/ingest`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ s3_key: s3Key, doc_id: docId }),
   })
+  const data = await res.json()
+  // 202 = async processing started (AWS), 200 = done synchronously (local dev)
+  if (res.status !== 200 && res.status !== 202) {
+    throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`)
+  }
+  return data as IngestResponse
+}
+
+/** Poll GET /documents every 3 s until doc_id appears, or timeout after maxMs. */
+export async function pollUntilIndexed(
+  docId: string,
+  onAttempt?: (attempt: number) => void,
+  maxMs = 5 * 60 * 1000,
+): Promise<Document> {
+  const interval = 3000
+  const maxAttempts = Math.ceil(maxMs / interval)
+  for (let i = 1; i <= maxAttempts; i++) {
+    await new Promise(r => setTimeout(r, interval))
+    onAttempt?.(i)
+    const docs = await fetchDocuments()
+    const found = docs.find(d => d.doc_id === docId)
+    if (found) return found
+  }
+  throw new Error('Indexing timed out after 5 minutes. Check Lambda logs for errors.')
 }
 
 export async function queryDocument(

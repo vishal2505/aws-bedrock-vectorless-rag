@@ -34,6 +34,7 @@ import os
 import uuid
 from typing import Optional
 
+import boto3
 from botocore.exceptions import ClientError
 
 from pageindex_like_indexer import build_tree, flatten_tree, strip_text_from_tree
@@ -44,6 +45,40 @@ logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
 
 BUCKET_NAME: str = os.environ.get("DOCUMENTS_BUCKET", "")
 TABLE_NAME: str = os.environ.get("DYNAMODB_TABLE", "")
+
+# ---------------------------------------------------------------------------
+# Async self-invocation
+#
+# API Gateway has a hard 29-second timeout but ingestion can take 30-90s
+# (one Bedrock call per document node). When called from API Gateway we
+# immediately return 202 and re-invoke ourselves asynchronously to do the
+# real work. The frontend polls GET /documents until the doc appears.
+# ---------------------------------------------------------------------------
+
+_lambda_client = None
+
+def _get_lambda():
+    global _lambda_client
+    if _lambda_client is None:
+        _lambda_client = boto3.client(
+            "lambda", region_name=os.environ.get("AWS_REGION", "ap-southeast-1")
+        )
+    return _lambda_client
+
+
+def _is_apigw_event(event: dict) -> bool:
+    """Return True when invoked through API Gateway (has httpMethod)."""
+    return "httpMethod" in event or "requestContext" in event
+
+
+def _invoke_async(function_name: str, payload: dict) -> None:
+    """Fire-and-forget Lambda invocation (InvocationType=Event)."""
+    _get_lambda().invoke(
+        FunctionName=function_name,
+        InvocationType="Event",       # async — returns immediately
+        Payload=json.dumps(payload).encode(),
+    )
+    logger.info("Async self-invocation triggered for function=%s", function_name)
 
 # DynamoDB items cannot exceed 400 KB. Chunk large texts so that a single
 # page never exceeds this limit (with headroom for attribute overhead).
@@ -58,29 +93,71 @@ def handler(event: dict, context) -> dict:
     """
     Lambda handler for POST /ingest.
 
-    Expected request body (JSON):
+    When called from API Gateway:
+        • Validates input, fires async self-invocation, returns 202 immediately.
+        • The frontend polls GET /documents until the doc appears.
+
+    When called asynchronously (re-invoked by itself):
+        • Runs the full Bedrock indexing pipeline and persists results.
+        • Return value is ignored by Lambda async invocation.
+
+    Request body (JSON):
         {
             "s3_key": "documents/my-report.pdf",
-            "doc_id": "optional-custom-id"        ← omit to auto-generate
+            "doc_id": "optional-custom-id"   ← omit to auto-generate
         }
 
-    Success response (HTTP 200):
-        {
-            "doc_id": "...",
-            "status": "indexed",
-            "node_count": 14
-        }
+    202 response (API Gateway path):
+        { "doc_id": "...", "status": "processing" }
 
-    Error responses (HTTP 4xx / 5xx):
-        { "error": "human-readable message" }
+    200 response (local dev / direct invocation):
+        { "doc_id": "...", "status": "indexed", "node_count": 14 }
     """
     logger.info("Ingest invoked | event keys: %s", list(event.keys()))
+
+    # ── Async worker path (re-invoked by ourselves) ──────────────────────────
+    # The async payload does NOT have httpMethod/requestContext, so we detect
+    # it by the absence of those keys. We still parse body the same way.
+    if not _is_apigw_event(event):
+        return _run_ingestion(event, context)
+
+    # ── API Gateway path ─────────────────────────────────────────────────────
+    try:
+        body = parse_body(event)
+
+        s3_key: Optional[str] = body.get("s3_key")
+        if not s3_key:
+            return error(400, "Missing required field: s3_key")
+
+        doc_id: str = body.get("doc_id") or str(uuid.uuid4())
+        logger.info("API Gateway call — triggering async ingest | doc_id=%s s3_key=%s", doc_id, s3_key)
+
+        _invoke_async(
+            context.function_name,
+            {"s3_key": s3_key, "doc_id": doc_id},
+        )
+
+        return success({"doc_id": doc_id, "status": "processing"}, status_code=202)
+
+    except ClientError as exc:
+        error_code = exc.response["Error"]["Code"]
+        logger.exception("AWS ClientError triggering async ingest: %s", error_code)
+        return error(500, f"AWS error [{error_code}]: {exc.response['Error']['Message']}")
+    except Exception as exc:
+        logger.exception("Unhandled error triggering async ingest")
+        return error(500, f"Internal error: {exc}")
+
+
+def _run_ingestion(event: dict, context) -> dict:
+    """Full ingestion pipeline — runs asynchronously (or in local dev)."""
+    logger.info("Running ingestion pipeline | event keys: %s", list(event.keys()))
 
     try:
         body = parse_body(event)
 
         s3_key: Optional[str] = body.get("s3_key")
         if not s3_key:
+            logger.error("Async ingest missing s3_key — cannot proceed")
             return error(400, "Missing required field: s3_key")
 
         doc_id: str = body.get("doc_id") or str(uuid.uuid4())
@@ -120,7 +197,7 @@ def handler(event: dict, context) -> dict:
         logger.exception("AWS ClientError during ingestion: %s", error_code)
         return error(500, f"AWS error [{error_code}]: {exc.response['Error']['Message']}")
     except Exception as exc:
-        logger.exception("Unhandled error in ingest_handler")
+        logger.exception("Unhandled error in ingest pipeline")
         return error(500, f"Internal error: {exc}")
 
 

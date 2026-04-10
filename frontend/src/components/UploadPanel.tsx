@@ -2,7 +2,7 @@ import { useState, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Upload, File, FileText, CheckCircle2, AlertCircle, X, Loader2 } from 'lucide-react'
 import { cn, slugify } from '../lib/utils'
-import { getPresignedUrl, uploadToS3, ingestDocument } from '../api'
+import { getPresignedUrl, uploadToS3, ingestDocument, pollUntilIndexed } from '../api'
 import type { UploadStage, Document } from '../types'
 
 interface Props {
@@ -14,16 +14,17 @@ const STAGE_LABELS: Record<UploadStage, string> = {
   idle:      '',
   presigning:'Getting upload URL…',
   uploading: 'Uploading to S3…',
-  indexing:  'Bedrock is indexing your document…',
+  indexing:  'Bedrock is indexing… this takes 30–90 s',
   done:      'Successfully indexed!',
   error:     '',
 }
 
 export default function UploadPanel({ onDocumentIndexed, onToast }: Props) {
   const [file, setFile]           = useState<File | null>(null)
-  const [stage, setStage]         = useState<UploadStage>('idle')
-  const [progress, setProgress]   = useState(0)
-  const [error, setError]         = useState('')
+  const [stage, setStage]           = useState<UploadStage>('idle')
+  const [progress, setProgress]     = useState(0)
+  const [pollCount, setPollCount]   = useState(0)
+  const [error, setError]           = useState('')
   const [isDragging, setIsDragging] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -57,12 +58,22 @@ export default function UploadPanel({ onDocumentIndexed, onToast }: Props) {
       await uploadToS3(presigned_url, file, setProgress)
 
       setStage('indexing')
+      setPollCount(0)
       const docId = slugify(file.name)
       const result = await ingestDocument(s3_key, docId)
 
+      let doc: Document
+      if (result.status === 'processing') {
+        // AWS path — Lambda is running async, poll until the doc appears
+        doc = await pollUntilIndexed(docId, (n) => setPollCount(n))
+      } else {
+        // Local dev path — indexing finished synchronously
+        doc = { doc_id: result.doc_id, s3_key, node_count: result.node_count ?? 0 }
+      }
+
       setStage('done')
-      onDocumentIndexed({ doc_id: result.doc_id, s3_key, node_count: result.node_count })
-      onToast(`"${result.doc_id}" indexed with ${result.node_count} sections`, 'success')
+      onDocumentIndexed(doc)
+      onToast(`"${doc.doc_id}" indexed with ${doc.node_count} sections`, 'success')
 
       // Reset after success
       setTimeout(() => { setFile(null); setStage('idle') }, 2500)
@@ -200,7 +211,11 @@ export default function UploadPanel({ onDocumentIndexed, onToast }: Props) {
               ? <CheckCircle2 size={15} className="flex-shrink-0" />
               : <Loader2 size={15} className="animate-spin flex-shrink-0" />
             }
-            <span>{STAGE_LABELS[stage]}</span>
+            <span>
+              {stage === 'indexing' && pollCount > 0
+                ? `Bedrock is indexing… (${pollCount * 3}s elapsed)`
+                : STAGE_LABELS[stage]}
+            </span>
           </motion.div>
         )}
 

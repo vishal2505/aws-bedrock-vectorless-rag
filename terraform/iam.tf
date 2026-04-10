@@ -127,6 +127,31 @@ resource "aws_iam_role_policy" "lambda_dynamodb" {
 }
 
 # ---------------------------------------------------------------------------
+# Inline policy: Lambda self-invocation
+#
+# The ingest Lambda re-invokes itself asynchronously (InvocationType=Event)
+# to work around API Gateway's hard 29-second timeout. It needs permission
+# to call lambda:InvokeFunction on functions in this project.
+# ---------------------------------------------------------------------------
+
+resource "aws_iam_role_policy" "lambda_self_invoke" {
+  name = "${var.project_name}-lambda-self-invoke"
+  role = aws_iam_role.lambda_exec.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "SelfInvoke"
+        Effect = "Allow"
+        Action = "lambda:InvokeFunction"
+        Resource = "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${var.project_name}-*"
+      }
+    ]
+  })
+}
+
+# ---------------------------------------------------------------------------
 # Inline policy: Bedrock model invocation
 #
 # Note: bedrock:InvokeModel covers both the InvokeModel and Converse APIs.
